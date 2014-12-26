@@ -21,11 +21,21 @@
 #include <iterator>
 #include <vector>
 
+const int ITERATIONS = 12;
+
 struct snowflake_vertex {
   double x;
   double y;
   double centre_x; //Centre co-ordinates are used to ensure new equilateral triangles point outwards
   double centre_y; 
+};
+
+static void iterate_snowflake(std::vector<snowflake_vertex>* previous_snowflake, std::vector<snowflake_vertex>* snowflake);
+
+struct iterate_snowflake_thread_data {
+  std::vector<snowflake_vertex>* previous_snowflake;
+  std::vector<snowflake_vertex>* snowflake;
+  volatile bool done;
 };
 
 inline snowflake_vertex create_snowflake_vertex(double x, double y, double centre_x, double centre_y) {
@@ -113,7 +123,7 @@ void draw_background(SDL_Renderer* renderer) {
   SDL_RenderClear(renderer);
 }
 
-void iterate_snowflake(std::vector<snowflake_vertex>* previous_snowflake, std::vector<snowflake_vertex>* snowflake){
+static void iterate_snowflake(std::vector<snowflake_vertex>* previous_snowflake, std::vector<snowflake_vertex>* snowflake){
   int end_vertex_offset; //Used to take into account that the final vertex connects up with the first
   double x1, y1, x2, y2, x3, y3; //Co-ordinates of the vertices of each new equilateral triangle
   double xd, yd; //The differences in x and y across the base of the new triangle
@@ -122,7 +132,6 @@ void iterate_snowflake(std::vector<snowflake_vertex>* previous_snowflake, std::v
   double xh, yh; //The differences in x and y across the height of the new triangle (perpendicular to xd, yd, passing through xm, ym)
 
   (*snowflake).clear(); //Empty the vector we will write into
-
   for (int i = 0; i < (*previous_snowflake).size(); i++) { //Loop through every current side of the snowflake
     (*snowflake).push_back((*previous_snowflake)[i]);
 
@@ -170,7 +179,14 @@ void iterate_snowflake(std::vector<snowflake_vertex>* previous_snowflake, std::v
   }
 }
 
-int main(int argc, char *argv[]) {
+int iterate_snowflake_thread(void* data) {
+  iterate_snowflake((*(iterate_snowflake_thread_data*)data).previous_snowflake, (*(iterate_snowflake_thread_data*)data).snowflake);
+  (*(iterate_snowflake_thread_data*)data).done = true;
+  return 0;
+}
+
+//Old main() that doesn't use multiple threads
+/*int main(int argc, char *argv[]) {
   SDL_Window* window;
   SDL_Renderer* renderer;
 
@@ -181,10 +197,11 @@ int main(int argc, char *argv[]) {
   SDL_CreateWindowAndRenderer(800, 800, 0, &window, &renderer);
   SDL_SetWindowTitle(window, "Snowflake");
 
-  for (int i = 0; i < 12; i++) { //Iterations of snowflake
+  for (int i = 0; i < 16; i++) { //Iterations of snowflake
     if (i == 0) {
       generate_initial_triangle(&buffer_snowflake, 400.0, 400.0, 300.0);
     } else {
+      
       iterate_snowflake(&render_snowflake, &buffer_snowflake);
     }
     std::swap(buffer_snowflake, render_snowflake);
@@ -198,7 +215,66 @@ int main(int argc, char *argv[]) {
     SDL_RenderPresent(renderer);
     SDL_Delay(1000);
   }
-  SDL_Delay(3000);
+  SDL_Delay(4000);
+
+  return 0;
+}*/
+
+int main(int argc, char *argv[]) {
+  SDL_Window* window;
+  SDL_Renderer* renderer;
+
+  std::vector<snowflake_vertex> buffer_snowflake;
+  std::vector<snowflake_vertex> render_snowflake;
+
+  SDL_Init(SDL_INIT_VIDEO);
+  SDL_CreateWindowAndRenderer(800, 800, 0, &window, &renderer);
+  SDL_SetWindowTitle(window, "Snowflake");
+
+  int i = 0;
+  bool done = false;
+  SDL_Event event;
+  SDL_Thread *iterate_thread;
+  iterate_snowflake_thread_data data;
+  data.done = true;
+  while(!done){
+    if (i == 0) {
+      generate_initial_triangle(&buffer_snowflake, 400.0, 400.0, 300.0);
+      std::swap(buffer_snowflake, render_snowflake);
+    } else if (data.done) {
+      if (i != 1) {
+	SDL_WaitThread(iterate_thread, NULL);
+	std::swap(buffer_snowflake, render_snowflake);
+	std::cout << "The next snowflake has " << render_snowflake.size() << " vertices." << std::endl;
+      }
+      if (i < ITERATIONS) {
+	data.previous_snowflake = &render_snowflake;
+	data.snowflake = &buffer_snowflake;
+	data.done = false;
+	
+	iterate_thread = SDL_CreateThread(iterate_snowflake_thread, "iteration", &data);
+      } else {
+	done = true;
+      }
+    }
+
+    while (SDL_PollEvent(&event)) {
+      switch (event.type) {
+      case SDL_QUIT:
+	exit(0);
+      }
+    }
+    
+    draw_background(renderer);
+    if (argc > 1 && strncmp(argv[1], "-aa", 3) == 0) {
+      draw_snowflake_antialiased(renderer, &render_snowflake);
+    }else{
+      draw_snowflake(renderer, &render_snowflake);
+    }
+    SDL_RenderPresent(renderer);
+    SDL_Delay(1536);
+    i++;
+  }
 
   return 0;
 }
